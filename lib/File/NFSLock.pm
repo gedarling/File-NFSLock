@@ -2,7 +2,7 @@
 #
 #  File::NFSLock - bdpO - NFS compatible (safe) locking utility
 #
-#  $Id: NFSLock.pm,v 1.30 2002/12/18 06:14:02 hookbot Exp $
+#  $Id: NFSLock.pm,v 1.34 2003/05/13 18:06:41 hookbot Exp $
 #
 #  Copyright (C) 2002, Paul T Seamons
 #                      paul@seamons.com
@@ -34,7 +34,7 @@ use Carp qw(croak confess);
 @ISA = qw(Exporter);
 @EXPORT_OK = qw(uncache);
 
-$VERSION = '1.19';
+$VERSION = '1.20';
 
 #Get constants, but without the bloat of
 #use Fcntl qw(LOCK_SH LOCK_EX LOCK_NB);
@@ -91,7 +91,10 @@ sub new {
   $self->{lock_pid} = $$;
   $self->{unlocked} = 1;
   foreach my $signal (@CATCH_SIGS) {
-    $SIG{$signal} ||= $graceful_sig;
+    if (!$SIG{$signal} ||
+        $SIG{$signal} eq "DEFAULT") {
+      $SIG{$signal} = $graceful_sig;
+    }
   }
 
   ### force lock_type to be numerical
@@ -274,16 +277,16 @@ sub unlock ($) {
       return $self->do_unlock;
     }
     $self->{unlocked} = 1;
-  }
-  foreach my $signal (@CATCH_SIGS) {
-    if ($SIG{$signal} &&
-        ($SIG{$signal} == $graceful_sig)) {
-      # Revert handler back to how it used to be.
-      # Unfortunately, this will restore the
-      # handler back even if there are other
-      # locks still in tact, but for most cases,
-      # it will still be an improvement.
-      delete $SIG{$signal};
+    foreach my $signal (@CATCH_SIGS) {
+      if ($SIG{$signal} &&
+          ($SIG{$signal} eq $graceful_sig)) {
+        # Revert handler back to how it used to be.
+        # Unfortunately, this will restore the
+        # handler back even if there are other
+        # locks still in tact, but for most cases,
+        # it will still be an improvement.
+        delete $SIG{$signal};
+      }
     }
   }
   return 1;
@@ -724,7 +727,7 @@ programming with copious amounts of input from Rob Brown.
 
 Rob B Brown (bbb@cpan.org) - In addition to helping in the
 programming, Rob Brown provided most of the core testing to make sure
-implementation worked properly.
+implementation worked properly.  He is now the current maintainer.
 
 Also Mark Overmeer (mark@overmeer.net) - Author of Mail::Box::Locker,
 from which some key concepts for File::NFSLock were taken.
@@ -734,12 +737,14 @@ from which Mark Overmeer based Mail::Box::Locker.
 
 =head1 COPYRIGHT
 
-  Copyright (C) 2001, Paul T Seamons
-                      paul@seamons.com
-                      http://seamons.com/
+  Copyright (C) 2001
+  Paul T Seamons
+  paul@seamons.com
+  http://seamons.com/
 
-                      Rob B Brown
-                      bbb@cpan.org
+  Copyright (C) 2002-2003,
+  Rob B Brown
+  bbb@cpan.org
 
   This package may be distributed under the terms of either the
   GNU General Public License
