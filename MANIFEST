@@ -3,6 +3,8 @@ MANIFEST			This file
 Makefile.PL			Makefile script
 README                          What it says
 lib/File/NFSLock.pm		Main module
+File-NFSLock.spec		Spec for RPM
+File-NFSLock.spec.PL		Spec generator
 examples/lock_test              Script used to test on live system
 t/100_load.t
 t/110_compare.t

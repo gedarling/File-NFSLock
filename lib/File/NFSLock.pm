@@ -2,9 +2,9 @@
 #
 #  File::NFSLock - bdpO - NFS compatible (safe) locking utility
 #
-#  $Id: NFSLock.pm,v 1.9 2001/11/06 00:16:34 hookbot Exp $
+#  $Id: NFSLock.pm,v 1.14 2002/05/30 16:54:02 hookbot Exp $
 #
-#  Copyright (C) 2001, Paul T Seamons
+#  Copyright (C) 2002, Paul T Seamons
 #                      paul@seamons.com
 #                      http://seamons.com/
 #
@@ -33,7 +33,7 @@ use Carp qw(croak confess);
 @ISA = qw(Exporter);
 @EXPORT_OK = qw(uncache);
 
-$VERSION = '1.12';
+$VERSION = '1.13';
 
 #Get constants, but without the bloat of
 #use Fcntl qw(LOCK_SH LOCK_EX LOCK_NB);
@@ -77,6 +77,7 @@ sub new {
   $self->{lock_type}  ||= 0;
   $self->{blocking_timeout}   ||= 0;
   $self->{stale_lock_timeout} ||= 0;
+  $self->{unlocked} = 1;
 
   ### force lock_type to be numerical
   if( $self->{lock_type} &&
@@ -158,6 +159,9 @@ sub new {
   ### clear up the NFS cache
   $self->uncache;
 
+  ### Yes, the lock has been aquired.
+  delete $self->{unlocked};
+
   return $self;
 }
 
@@ -195,10 +199,10 @@ sub create_magic ($;$) {
   my $self = shift;
   my $append_file = shift || $self->{rand_file};
   $self->{lock_line} ||= "$HOSTNAME $$ ".time()." ".int(rand()*10000)."\n";
-  my $hand = do{ local *_FH };
-  open ($hand,">>$append_file") or do { $errstr = "Couldn't open \"$append_file\" [$!]"; return undef; };
-  print $hand $self->{lock_line};
-  close($hand);
+  local *_FH;
+  open (_FH,">>$append_file") or do { $errstr = "Couldn't open \"$append_file\" [$!]"; return undef; };
+  print _FH $self->{lock_line};
+  close _FH;
   return 1;
 }
 
@@ -286,8 +290,8 @@ sub do_unlock_shared ($$) {
   my $lock = new File::NFSLock ($lock_file,LOCK_EX,62,60);
 
   ### get the handle on the lock file
-  my $hand = do{ local *_FH };
-  if( ! open ($hand,'+<'.$lock_file) ){
+  local *_FH;
+  if( ! open (_FH,"+<$lock_file") ){
     if( ! -e $lock_file ){
       return 1;
     }else{
@@ -297,21 +301,21 @@ sub do_unlock_shared ($$) {
 
   ### read existing file
   my $content = '';
-  while(defined(my $line=<$hand>)){
+  while(defined(my $line=<_FH>)){
     next if $line eq $lock_line;
     $content .= $line;
   }
 
   ### other shared locks exist
   if( length($content) ){
-    seek     $hand, 0, 0;
-    print    $hand $content;
-    truncate $hand, length($content);
-    close $hand;
+    seek     _FH, 0, 0;
+    print    _FH $content;
+    truncate _FH, length($content);
+    close    _FH;
 
   ### only I exist
   }else{
-    close $hand;
+    close _FH;
     unlink $lock_file;
   }
 
@@ -330,28 +334,28 @@ sub uncache ($;$) {
 1;
 
 
-=head1 NAME 
+=head1 NAME
 
 File::NFSLock - perl module to do NFS (or not) locking
 
 =head1 SYNOPSIS
 
-  use File::NFSLock (uncache);
+  use File::NFSLock qw(uncache);
+  use Fcntl qw(LOCK_EX LOCK_NB);
 
   my $file = "somefile";
 
   ### set up a lock - lasts until object looses scope
-  if( defined(my $lock = File::NFSLock->new({
+  if (my $lock = new File::NFSLock {
     file      => $file,
-    lock_type => "NONBLOCKING",
+    lock_type => LOCK_EX|LOCK_NB,
     blocking_timeout   => 10,      # 10 sec
     stale_lock_timeout => 30 * 60, # 30 min
-  })) ){
-    
-    ### OR
-    ### my $lock = File::NFSLock->new($file,"NONBLOCKING",10,30*60)
+  }) {
 
-    
+    ### OR
+    ### my $lock = File::NFSLock->new($file,LOCK_EX|LOCK_NB,10,30*60);
+
     ### do write protected stuff on $file
     ### at this point $file is uncached from NFS (most recent)
     open(FILE, "+<$file") || die $!;
@@ -394,7 +398,7 @@ is created successfully, a lock is currently in place and remains in
 place until the lock object goes out of scope (or calls the unlock
 method).
 
-A lock object is created by calling the new method and passing two 
+A lock object is created by calling the new method and passing two
 to four parameters in the following manner:
 
   my $lock = File::NFSLock->new($file,
@@ -404,7 +408,7 @@ to four parameters in the following manner:
                                 );
 
 Additionally, parameters may be passed as a hashref:
-  
+
   my $lock = File::NFSLock->new({
     file               => $file,
     lock_type          => $lock_type,
@@ -426,7 +430,7 @@ for this file to exist.
 =item Parameter 2: lock_type
 
 Lock type must be one of the following:
- 
+
   BLOCKING
   BL
   EXCLUSIVE (BLOCKING)
@@ -473,11 +477,14 @@ contain the cause for the failure to get a lock.  Useful primarily for debugging
 =head1 LOCK_EXTENSION
 
 By default File::NFSLock will use a lock file extenstion of ".NFSLock".  This is
-now in a global variable $File::NFSLock::LOCK_EXTENSION that may be changed to
+in a global variable $File::NFSLock::LOCK_EXTENSION that may be changed to
 suit other purposes (such as compatibility in mail systems).
 
 =head1 BUGS
 
+  Aquiring a lock within the same process always fails.
+
+  Stale locks from abnormal termination are not detected.
 
 =head2 FIFO
 
@@ -495,13 +502,28 @@ directory, but I am unaware of the best way to do it.  The biggest use I
 can see would be to avoid NFS cache of directory modified and last accessed
 timestamps.
 
+=head1 INSTALL
+
+Download and extract tarball before running
+these commands in its base directory:
+
+  perl Makefile.PL
+  make
+  make test
+  make install
+
+For RPM installation, download tarball before
+running these commands in your _topdir:
+
+  rpm -ta SOURCES/File-NFSLock-*.tar.gz
+  rpm -ih RPMS/noarch/perl-File-NFSLock-*.rpm
 
 =head1 AUTHORS
 
 Paul T Seamons (paul@seamons.com) - Performed majority of the
 programming with copious amounts of input from Rob Brown.
 
-Rob B Brown (rob@roobik.com) - In addition to helping in the
+Rob B Brown (bbb@cpan.org) - In addition to helping in the
 programming, Rob Brown provided most of the core testing to make sure
 implementation worked properly.
 
@@ -518,10 +540,10 @@ from which Mark Overmeer based Mail::Box::Locker.
                       http://seamons.com/
 
                       Rob B Brown
-                      rob@roobik.com
-  
+                      bbb@cpan.org
+
   This package may be distributed under the terms of either the
-  GNU General Public License 
+  GNU General Public License
     or the
   Perl Artistic License
 

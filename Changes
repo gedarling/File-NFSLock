@@ -1,5 +1,15 @@
 Revision history for Perl extension File::NFSLock.
 
+1.13  May 30 12:00 2002
+        - Add spec file for RPM packaging.
+        - Show example in perldoc using numerical constants.
+        - Make perldoc example strict clean.
+        - Add INSTALL section to perldoc.
+        - Fixed bug that forced a lock aquired by another
+          process to be released when an exclusive lock
+          attempt fails.
+          Patch by andyh@myinternet.com.au (Andy Hird)
+
 1.12  Nov 05 12:00 2001
         - Change code to utilize numerical constants
           instead of the magic strings.

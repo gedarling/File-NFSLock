@@ -1,32 +1,38 @@
 use ExtUtils::MakeMaker;
 
+WriteMakefile
+  NAME          => "File::NFSLock",
+  AUTHOR        => "Paul Seamons",
+  ABSTRACT_FROM => "lib/File/NFSLock.pm",
+  VERSION_FROM  => "lib/File/NFSLock.pm",
+  PREREQ_PM     => { # e.g., 'Module::Name' => 1.1
+  },
 
-my %args = (
-            'NAME'	      => 'File::NFSLock',
-            'VERSION_FROM'    => 'lib/File/NFSLock.pm',
-            
-            'PREREQ_PM'	      => {
-            },
-            
-            dist              => {
-              DIST_DEFAULT => 'all tardist',
-              COMPRESS     => 'gzip -vf',
-              SUFFIX       => '.gz',
-            },
-            
-            clean             => {
-              FILES        => '*~',
-            },
-            
-            realclean         => {
-              FILES        => '*~',
-            },
-            
-            );
+  dist          => {
+    DIST_DEFAULT => 'all tardist',
+    COMPRESS     => 'gzip -vf',
+    SUFFIX       => '.gz',
+  },
 
-WriteMakefile(%args);
+  clean          => {
+    FILES        => '*~',
+  },
+
+  realclean         => {
+    FILES        => '*~',
+  },
+  ;
 
 package MY;
+
+sub processPL {
+  my $self = shift;
+  my $block = $self->SUPER::processPL(@_);
+  # "Version:" in spec needs to match
+  # "$VERSION" from VERSION_FROM
+  $block =~ s%(spec.PL\s*)$%$1 \$\(VERSION_FROM\)%m;
+  $block;
+}
 
 sub libscan {
   my $self = shift;
@@ -36,12 +42,12 @@ sub libscan {
 
 sub postamble {
   return qq^
-    
+
 pm_to_blib: README
 
-README: lib/File/NFSLock.pm
-\tpod2text lib/File/NFSLock.pm >README
-  ^;
+README: \$(VERSION_FROM)
+	pod2text \$(VERSION_FROM) > README
+^;
 }
 
 1;
