@@ -15,9 +15,11 @@ my $datafile = "testfile.dat";
 # Create a blank file
 sysopen ( FH, $datafile, O_CREAT | O_RDWR | O_TRUNC );
 close (FH);
+# test 1
 ok (-e $datafile && !-s _);
 
 
+# test 2
 ok (pipe(RD1,WR1)); # Connected pipe for child1
 if (!fork) {
   # Child #1 process
@@ -38,6 +40,7 @@ if (!fork) {
   }
   exit;
 }
+# test 3
 ok 1; # Fork successful
 close (WR1);
 # Waiting for child1 to finish its lock status
@@ -45,9 +48,11 @@ my $child1_lock = <RD1>;
 close (RD1);
 # Report status of the child1_lock.
 # It should have been successful
+# test 4
 ok ($child1_lock);
 
 
+# test 5
 ok (pipe(RD2,WR2)); # Connected pipe for child2
 if (!fork) {
   # This should block until the exclusive lock is done
@@ -78,6 +83,7 @@ if (!fork) {
   sleep 5;
   exit; # Release the shared lock
 }
+# test 6
 ok 1; # Fork successful
 close (WR2);
 # Waiting for child2 to finish its lock status
@@ -85,6 +91,7 @@ my $child2_lock = <RD2>;
 close (RD2);
 # Report status of the child2_lock.
 # This should have eventually been successful.
+# test 7
 ok ($child2_lock);
 
 # If all these processes take longer than 2 seconds,
@@ -95,6 +102,7 @@ ok ($child2_lock);
 # much longer than the maximum delay of any of the
 # shared locks (at least 5 seconds set above).
 $SIG{ALRM} = sub {
+  # test (unknown)
   ok 0;
   die "Shared locks not running simultaneously";
 };
@@ -110,7 +118,7 @@ for (my $i = 0; $i < $m ; $i++) {
     };
     if ($lock) {
       sleep 2;  # Hold the shared lock for a moment
-      # Appending is always safe across NFS
+      # Appending should always be safe across NFS
       sysopen(FH, $datafile, O_RDWR | O_APPEND);
       # Put one line to signal the lock was successful.
       print FH "1\n";
@@ -126,12 +134,14 @@ for (my $i = 0; $i < $m ; $i++) {
 for (my $i = 0; $i < $m + 2 ; $i++) {
   # Wait until all the children are finished.
   wait;
+  # test 8 .. 9+$m
   ok 1;
 }
 
 # If we made it here, then it must have been faster
 # than the timeout.  So reset the timer.
 alarm(0);
+# test 10 + $m
 ok 1;
 
 # Load up whatever the file says now
@@ -140,11 +150,13 @@ sysopen(FH, $datafile, O_RDONLY);
 # The first line should say "shared" if child2 really
 # waited for child1's exclusive lock to finish.
 $_ = <FH>;
+# test 11 + $m
 ok /shared/;
 
 for (my $i = 0; $i < $m ; $i++) {
   $_ = <FH>;
   chomp;
+  # test 12+$m .. 11+2*$m
   ok $_, 1;
 }
 close FH;

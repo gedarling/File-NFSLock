@@ -11,4 +11,5 @@ t/110_compare.t
 t/120_single.t
 t/200_bl_ex.t
 t/210_nb_ex.t
+t/220_ex_scope.t
 t/300_bl_sh.t
