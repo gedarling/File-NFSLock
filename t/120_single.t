@@ -19,7 +19,7 @@ ok (-e $datafile && !-s _);
 unlink "$datafile$File::NFSLock::LOCK_EXTENSION";
 
 # Single process trying to count to $n
-my $n = 10;
+my $n = 20;
 
 for (my $i = 0; $i < $n ; $i++) {
   my $lock = new File::NFSLock {
