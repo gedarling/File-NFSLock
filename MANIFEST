@@ -1,0 +1,8 @@
+Changes				Module History
+MANIFEST			This file
+MANIFEST.SKIP			Files to skip when making the dist
+Makefile.PL			Makefile script
+README                          What it says
+lib/File/NFSLock.pm		Main module
+t/NFSLock.t                     make test script
+examples/lock_test              Script used to test on live system

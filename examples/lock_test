@@ -1,0 +1,37 @@
+#!/usr/bin/perl
+
+### Written by Rob Brown
+### This script is designed to be ran on multiple boxes
+### by multiple processes with a high increment number.
+### The processes should all compete, but a successful
+### test occurs if all of the specified inc's add up to
+### the final number in the specified file.
+
+use File::NFSLock ();
+use Fcntl qw(:DEFAULT); # Get O_ values
+use strict;
+
+my $datafile = shift;
+my $inc      = shift || do {
+  print "Usage: $0 <filename> <increment>\n";
+  exit;
+};
+
+while ( $inc -- > 0 ) {
+  my $lock = File::NFSLock->new($datafile,"BL") 
+    or print "Ouch1\n"; # blocking lock (Exclusive)
+
+  sysopen(FH, $datafile, O_RDWR | O_CREAT)
+    or die "Cannot open [$datafile][$!]";
+
+  ### read the cound a spit it out
+  my $count = <FH>;
+  $count ++;
+
+  print "[$$] I win with [$count]          \r";
+
+  seek (FH,0,0);
+  print FH "$count\n";
+  close FH;
+}
+print "\n\n";

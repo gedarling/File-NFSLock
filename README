@@ -1,0 +1,123 @@
+NAME
+    File::NFSLock - perl module to do NFS (or not) locking
+
+SYNOPSIS
+      use File::NFSLock (uncache);
+
+      my $file = "somefile";
+
+      ### set up a lock - lasts until object looses scope
+      if( defined(my $lock = File::NFSLock->new($file,"NONBLOCKING")) ){
+    
+        ### do write protected stuff on $file
+        ### at this point $file is uncached from NFS (most recent)
+        open(FILE, "+<$file") || die $!;
+
+        ### or open it any way you like
+        ### my $fh = IO::File->open( $file, 'w' ) || die $!
+
+        ### update (uncache across NFS) other files
+        uncache("someotherfile1");
+        uncache("someotherfile2");
+        # open(FILE2,"someotherfile1");
+
+        ### unlock it
+        $lock->unlock();
+        ### OR
+        ### undef $lock;
+        ### OR let $lock go out of scope
+      }
+
+DESCRIPTION
+    Program based of concept of hard linking of files being atomic across
+    NFS. This concept was mentioned in Mail::Box::Locker (which was
+    originally presented in Mail::Folder::Maildir). Some routine flow is
+    taken from there -- particularly the idea of creating a random local
+    file, hard linking a common file to the local file, and then checking
+    the nlink status. Some ideologies were not complete (uncache mechanism,
+    shared locking) and some coding was even incorrect (wrong stat index).
+    File::NFSLock was written to be light, generic, and fast.
+
+USAGE
+    Locking occurs by creating a File::NFSLock object. If the object is
+    created successfully, a lock is currently in place and remains in place
+    until the lock object goes out of scope (or calls the unlock method).
+
+    A lock object is created by calling the new method and passing two or
+    three parameters:
+
+    Parameter 1: filename
+        Filename of the file upon which it is anticipated that a write will
+        happen to. Locking will provide the most recent version (uncached)
+        of this file upon a successful file lock.
+
+    Parameter 2: lock type
+        Lock type must be one of the following:
+
+          BLOCKING
+          BL
+          NONBLOCKING
+          NB
+          SHARED
+          SH
+
+        Lock type determines whether the lock will be blocking, non
+        blocking, or shared. Blocking locks will wait until other locks are
+        removed before the process continues. Non blocking locks will return
+        undef if another process currently has the lock. Shared will allow
+        other process to do a shared lock at the same time (shared is not
+        yet implemented).
+
+    Parameter 3: timeout (option)
+        Timeout is used in conjunction with a blocking timeout. If
+        specified, File::NFSLock will block up to the number of seconds
+        specified in timeout before returning undef (could not get a lock).
+
+TODO
+        Features yet to be implemented...
+
+        SHARED locks
+            Need to allow for shared locking. This will allow for safe
+            reading on files. Underway.
+
+        Fnctl constants
+            Allow for passing of Fnctl constants rather than keywords.
+
+        Stale lock checking
+            Allow for easy view into whether a lock is stale or not. Stale
+            locks can occur if process is "kill -9"ed during a lock.
+
+        Tests
+            Improve the test suite.
+
+AUTHORS
+        Paul T Seamons (paul@seamons.com) - Performed majority of the
+        programming with copious amounts of input from Rob Brown.
+
+        Rob B Brown (rob@roobik.com) - In addition to helping in the
+        programming, Rob Brown provided most of the core testing to make
+        sure implementation worked properly.
+
+        Also Mark Overmeer (mark@overmeer.net) - Author of
+        Mail::Box::Locker, from which some key concepts for File::NFSLock
+        were taken.
+
+        Also Kevin Johnson (kjj@pobox.com) - Author of
+        Mail::Folder::Maildir, from which Mark Overmeer based
+        Mail::Box::Locker.
+
+COPYRIGHT
+          Copyright (C) 2001, Paul T Seamons
+                              paul@seamons.com
+                              http://seamons.com/
+
+                              Rob B Brown
+                              rob@roobik.com
+  
+          This package may be distributed under the terms of either the
+          GNU General Public License 
+            or the
+          Perl Artistic License
+
+          All rights reserved.
+
