@@ -1,5 +1,18 @@
 Revision history for Perl extension File::NFSLock.
 
+1.15  Jun 04 09:00 2002
+        - Default to catch certain signals to avoid
+          creating stale locks on graceful termination.
+        - More tests to test signal handlers.
+        - Fix test t/300_bl_sh.t to measure only
+          what is required.
+
+1.14  Jun 03 12:00 2002
+        - Add test to exploit unlock bug
+          (fixed by Andy in 1.13)
+        - Less anal tests for slower platforms
+          (Slowaris) to succeed as well.
+
 1.13  May 30 12:00 2002
         - Add spec file for RPM packaging.
         - Show example in perldoc using numerical constants.

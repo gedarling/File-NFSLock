@@ -2,7 +2,7 @@
 #
 #  File::NFSLock - bdpO - NFS compatible (safe) locking utility
 #
-#  $Id: NFSLock.pm,v 1.15 2002/05/31 18:14:16 hookbot Exp $
+#  $Id: NFSLock.pm,v 1.18 2002/06/05 13:22:30 hookbot Exp $
 #
 #  Copyright (C) 2002, Paul T Seamons
 #                      paul@seamons.com
@@ -27,13 +27,14 @@ package File::NFSLock;
 use strict;
 use Exporter ();
 use vars qw(@ISA @EXPORT_OK $VERSION $TYPES
-            $LOCK_EXTENSION $HOSTNAME $errstr);
+            $LOCK_EXTENSION $HOSTNAME $errstr
+            $graceful_sig @CATCH_SIGS);
 use Carp qw(croak confess);
 
 @ISA = qw(Exporter);
 @EXPORT_OK = qw(uncache);
 
-$VERSION = '1.14';
+$VERSION = '1.15';
 
 #Get constants, but without the bloat of
 #use Fcntl qw(LOCK_SH LOCK_EX LOCK_NB);
@@ -57,6 +58,15 @@ $HOSTNAME = undef;
 
 ###----------------------------------------------------------------###
 
+my $graceful_sig = sub {
+  print STDERR "Received SIG$_[0]\n" if @_;
+  # Perl's exit should safely DESTROY any objects
+  # still "alive" before calling the real _exit().
+  exit;
+};
+
+@CATCH_SIGS = qw(TERM INT);
+
 sub new {
   $errstr = undef;
 
@@ -78,6 +88,9 @@ sub new {
   $self->{blocking_timeout}   ||= 0;
   $self->{stale_lock_timeout} ||= 0;
   $self->{unlocked} = 1;
+  foreach my $signal (@CATCH_SIGS) {
+    $SIG{$signal} ||= $graceful_sig;
+  }
 
   ### force lock_type to be numerical
   if( $self->{lock_type} &&
@@ -86,9 +99,6 @@ sub new {
     $self->{lock_type} = $TYPES->{$self->{lock_type}};
   }
 
-  croak ($errstr = "Unrecognized lock_type operation setting [$self->{lock_type}]")
-    unless $self->{lock_type} && $self->{lock_type} =~ /^\d+/;
-
   ### need the hostname
   if( !$HOSTNAME ){
     require Sys::Hostname;
@@ -96,10 +106,13 @@ sub new {
   }
 
   ### quick usage check
-  croak ($errstr = "Usage: my \$f = File::NFSLock->new('/pathtofile/file',\n"
+  croak ($errstr = "Usage: my \$f = $class->new('/pathtofile/file',\n"
          ."'BLOCKING|EXCLUSIVE|NONBLOCKING|SHARED', [blocking_timeout, stale_lock_timeout]);\n"
          ."(You passed \"$self->{file}\" and \"$self->{lock_type}\")")
     unless length($self->{file});
+
+  croak ($errstr = "Unrecognized lock_type operation setting [$self->{lock_type}]")
+    unless $self->{lock_type} && $self->{lock_type} =~ /^\d+$/;
 
   ### Input syntax checking passed, ready to bless
   bless $self, $class;
@@ -179,6 +192,17 @@ sub unlock ($) {
       return $self->do_unlock( $self->{lock_file} );
     }
     $self->{unlocked} = 1;
+  }
+  foreach my $signal (@CATCH_SIGS) {
+    if ($SIG{$signal} &&
+        ($SIG{$signal} == $graceful_sig)) {
+      # Revert handler back to how it used to be.
+      # Unfortunately, this will restore the
+      # handler back even if there are other
+      # locks still in tact, but for most cases,
+      # it will still be an improvement.
+      delete $SIG{$signal};
+    }
   }
   return 1;
 }

@@ -13,3 +13,5 @@ t/200_bl_ex.t
 t/210_nb_ex.t
 t/220_ex_scope.t
 t/300_bl_sh.t
+t/400_kill.t
+t/410_die.t

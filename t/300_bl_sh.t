@@ -6,9 +6,10 @@ use Fcntl qw(O_CREAT O_RDWR O_RDONLY O_TRUNC O_APPEND LOCK_EX LOCK_NB LOCK_SH);
 
 # $m simultaneous processes trying to obtain a shared lock
 my $m = 20;
+my $shared_delay = 5;
 
 $| = 1; # Buffer must be autoflushed because of fork() below.
-plan tests => ($m*2 + 11);
+plan tests => (13 + 3*$m);
 
 my $datafile = "testfile.dat";
 
@@ -78,9 +79,9 @@ if (!fork) {
   print WR2 !!$lock; # Send boolean success status down pipe
   close(WR2); # Signal to parent that the Blocking lock is done
   close(RD2);
-  # Then hold the shared lock for a moment
+  # Then hold this shared lock for a moment
   # while other shared locks are attempted
-  sleep 5;
+  sleep($shared_delay*2);
   exit; # Release the shared lock
 }
 # test 6
@@ -94,11 +95,11 @@ close (RD2);
 # test 7
 ok ($child2_lock);
 
-# If all these processes take longer than 2 seconds,
+# If all these processes take longer than $shared_delay seconds,
 # then they are probably not running synronously
 # and the shared lock is not working correctly.
 # But if all the children obatin the lock simultaneously,
-# like they are supposed to, then it shouldn't take
+# like they're supposed to, then it shouldn't take
 # much longer than the maximum delay of any of the
 # shared locks (at least 5 seconds set above).
 $SIG{ALRM} = sub {
@@ -106,7 +107,14 @@ $SIG{ALRM} = sub {
   ok 0;
   die "Shared locks not running simultaneously";
 };
-alarm(10);
+
+# Use pipe to read lock success status from children
+# test 8
+ok (pipe(RD3,WR3));
+
+# Wait a few seconds less than if all locks were
+# aquired asyncronously to ensure that they overlap.
+alarm($m*$shared_delay-2);
 
 for (my $i = 0; $i < $m ; $i++) {
   if (!fork) {
@@ -116,27 +124,41 @@ for (my $i = 0; $i < $m ; $i++) {
       file => $datafile,
       lock_type => LOCK_SH,
     };
+    # Send boolean success status down pipe
+    print WR3 !!$lock,"\n";
+    close(WR3);
     if ($lock) {
-      sleep 2;  # Hold the shared lock for a moment
+      sleep $shared_delay;  # Hold the shared lock for a moment
       # Appending should always be safe across NFS
       sysopen(FH, $datafile, O_RDWR | O_APPEND);
       # Put one line to signal the lock was successful.
       print FH "1\n";
       close FH;
+      $lock->unlock();
+    } else {
+      warn "Lock [$i] failed!";
     }
     exit;
   }
 }
 
+# Parent process never writes to pipe
+close(WR3);
 
-# There are $m children plus the first exclusive locker child
-# and the second child obtaining the first shared lock.
-for (my $i = 0; $i < $m + 2 ; $i++) {
-  # Wait until all the children are finished.
-  wait;
-  # test 8 .. 9+$m
-  ok 1;
+
+# There were $m children attempting the shared locks.
+for (my $i = 0; $i < $m ; $i++) {
+  # Report status of each lock attempt.
+  my $got_shared_lock = <RD3>;
+  # test 9 .. 8+$m
+  ok $got_shared_lock;
 }
+
+# There should not be anything left in the pipe.
+my $extra = <RD3>;
+# test 9 + $m
+ok !$extra;
+close (RD3);
 
 # If we made it here, then it must have been faster
 # than the timeout.  So reset the timer.
@@ -144,19 +166,28 @@ alarm(0);
 # test 10 + $m
 ok 1;
 
+# There are $m children plus the child1 exclusive locker
+# and the child2 obtaining the first shared lock.
+for (my $i = 0; $i < $m + 2 ; $i++) {
+  # Wait until all the children are finished.
+  wait;
+  # test 11+$m .. 12+2*$m
+  ok 1;
+}
+
 # Load up whatever the file says now
 sysopen(FH, $datafile, O_RDONLY);
 
 # The first line should say "shared" if child2 really
 # waited for child1's exclusive lock to finish.
 $_ = <FH>;
-# test 11 + $m
+# test 13 + 2*$m
 ok /shared/;
 
 for (my $i = 0; $i < $m ; $i++) {
   $_ = <FH>;
   chomp;
-  # test 12+$m .. 11+2*$m
+  # test 14+2*$m .. 13+3*$m
   ok $_, 1;
 }
 close FH;
