@@ -1,5 +1,8 @@
 Revision history for Perl extension File::NFSLock.
 
+1.19  Dec 17 23:30 2002
+        - Minor code cleanup patch by Stephen Waters.
+
 1.18  Jul 25 17:00 2002
         - Add newpid() method to handle fork() conditions.
 

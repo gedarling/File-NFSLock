@@ -2,7 +2,7 @@
 #
 #  File::NFSLock - bdpO - NFS compatible (safe) locking utility
 #
-#  $Id: NFSLock.pm,v 1.27 2002/07/26 04:56:13 hookbot Exp $
+#  $Id: NFSLock.pm,v 1.30 2002/12/18 06:14:02 hookbot Exp $
 #
 #  Copyright (C) 2002, Paul T Seamons
 #                      paul@seamons.com
@@ -34,7 +34,7 @@ use Carp qw(croak confess);
 @ISA = qw(Exporter);
 @EXPORT_OK = qw(uncache);
 
-$VERSION = '1.18';
+$VERSION = '1.19';
 
 #Get constants, but without the bloat of
 #use Fcntl qw(LOCK_SH LOCK_EX LOCK_NB);
@@ -130,11 +130,10 @@ sub new {
       time() + $self->{blocking_timeout} : 0;
 
   ### remove an old lockfile if it is older than the stale_timeout
-  if( -e $self->{lock_file} && $self->{stale_lock_timeout} > 0 ){
-    # If it's older than stale_lock_timeout, wipe it.
-    if ( time() - (stat _)[9] > $self->{stale_lock_timeout} ){ # check mtime
-      unlink $self->{lock_file};
-    }
+  if( -e $self->{lock_file} &&
+      $self->{stale_lock_timeout} > 0 &&
+      time() - (stat _)[9] > $self->{stale_lock_timeout} ){
+    unlink $self->{lock_file};
   }
 
   while (1) {
@@ -153,13 +152,14 @@ sub new {
 
     ### Lock failed!
 
-    ### I know this may be cause a race condition,
-    ### but it's okay.  It is just a stab in the
-    ### dark to possibly find long dead processes.
-    if ( -e $self->{lock_file} &&           # If lock exists
-         open (_FH,"+<$self->{lock_file}")  # And is readable
-         ) {
-      ### Take a look at who is mooching on the lock
+    ### I know this may be a race condition, but it's okay.  It is just a
+    ### stab in the dark to possibly find long dead processes.
+
+    ### If lock exists and is readable, see who is mooching on the lock
+
+    if ( -e $self->{lock_file} &&
+         open (_FH,"+<$self->{lock_file}") ){
+
       my @mine = ();
       my @them = ();
       my @dead = ();
@@ -170,27 +170,21 @@ sub new {
       while(defined(my $line=<_FH>)){
         if ($line =~ /^$HOSTNAME (\d+) /) {
           my $pid = $1;
-          if ($pid == $$) {
-            # This is me.
+          if ($pid == $$) {       # This is me.
             push @mine, $line;
-          } elsif (kill 0, $pid) {
-            # This guy is still running.
+          }elsif(kill 0, $pid) {  # Still running on this host.
             push @them, $line;
-          } else {
-            # Not running on this box.
+          }else{                  # Finished running on this host.
             push @dead, $line;
           }
-        } else {
-          # Running on another box.
-          # Assume it is still running.
-          push @them, $line;
+        } else {                  # Running on another host, so
+          push @them, $line;      #  assume it is still running.
         }
       }
 
-      ### If there was at least one stale lock discovered.
+      ### If there was at least one stale lock discovered...
       if (@dead) {
-        # The lock_file must be locked before removing
-        # stale locks to avoid a race condition.
+        # Lock lock_file to avoid a race condition.
         local $LOCK_EXTENSION = ".shared";
         my $lock = new File::NFSLock {
           file => $self->{lock_file},
@@ -198,52 +192,42 @@ sub new {
           blocking_timeout => 62,
           stale_lock_timeout => 60,
         };
-        # Rescan in case the lock contents have
-        # been modified in between the time the
-        # stale lock was discovered and the lock
-        # on the lockfile has been aquired.
+
+        ### Rescan in case lock contents were modified between time stale lock
+        ###  was discovered and lockfile lock was acquired.
         seek (_FH, 0, 0);
         my $content = '';
         while(defined(my $line=<_FH>)){
           if ($line =~ /^$HOSTNAME (\d+) /) {
             my $pid = $1;
-            if (!kill 0, $pid) {
-              # On this box, but not running.
-              next;
-            }
-            # This guy is still running on this box.
-          } else {
-            # It is on other box.
-            # Assume it is still running.
+            next if (!kill 0, $pid);  # Skip dead locks from this host
           }
-          # This is still a valid lock
-          $content .= $line;
+          $content .= $line;          # Save valid locks
         }
 
+        ### Save any valid locks or wipe file.
         if( length($content) ){
-          # Save all the "living" locks.
           seek     _FH, 0, 0;
           print    _FH $content;
           truncate _FH, length($content);
           close    _FH;
         }else{
-          # No valid locks left, wipe it.
           close _FH;
           unlink $self->{lock_file};
         }
 
+      ### No "dead" or stale locks found.
       } else {
-        # No "dead" or stale locks found.
         close _FH;
       }
 
-      ### If attempting to aquire the same type of lock
-      ### that it is already locked with, and I've already
-      ### locked it myself, then it is safe to lock again.
-      if ($try_lock_exclusive eq $has_lock_exclusive && @mine) {
-        ### Just kick out successfully without really locking.
-        ### Assume the locks will be released in the reverse
-        ### order from how they were established.
+      ### If attempting to acquire the same type of lock
+      ###  that it is already locked with, and I've already
+      ###  locked it myself, then it is safe to lock again.
+      ### Just kick out successfully without really locking.
+      ### Assumes locks will be released in the reverse
+      ###  order from how they were established.
+      if ($try_lock_exclusive eq $has_lock_exclusive && @mine){
         return $self;
       }
     }
@@ -376,22 +360,18 @@ sub do_lock_shared {
   ### file with the magic $SHARE_BIT set.
   my $success = link( $rand_file, $lock_file);
   unlink $rand_file;
-  if ( !$success ) {
-    if (-e $lock_file) {
-      if( ((stat _)[2] & $SHARE_BIT) != $SHARE_BIT ){
-        $errstr = "Exclusive lock exists.";
-        return undef;
-      }
-    } else {
-      # $lock_file does not exist? Race condition? Permission denied?
-    }
-    # Looks like there already exists a share lock.
-    # So must be able to obtain another shared lock.
-    # Append my magic line too.
+  if ( !$success &&
+       -e $lock_file &&
+       ((stat _)[2] & $SHARE_BIT) != $SHARE_BIT ){
+
+    $errstr = 'Exclusive lock exists.';
+    return undef;
+
+  } elsif ( !$success ) {
+    ### Shared lock exists, append my lock
     $self->create_magic ($self->{lock_file});
-  } else {
-    # Very first process to obtain a shared lock.
   }
+
   # Success
   return 1;
 }
