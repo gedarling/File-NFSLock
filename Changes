@@ -1,5 +1,8 @@
 Revision history for Perl extension File::NFSLock.
 
+1.18  Jul 25 17:00 2002
+        - Add newpid() method to handle fork() conditions.
+
 1.17  Jun 10 12:00 2002
         - Handle system crash recovery better or
           other abnormal/abrupt termination (like SIGKILL)

@@ -2,14 +2,14 @@
 #
 #  File::NFSLock - bdpO - NFS compatible (safe) locking utility
 #
-#  $Id: NFSLock.pm,v 1.23 2002/06/10 15:00:15 hookbot Exp $
+#  $Id: NFSLock.pm,v 1.27 2002/07/26 04:56:13 hookbot Exp $
 #
 #  Copyright (C) 2002, Paul T Seamons
 #                      paul@seamons.com
 #                      http://seamons.com/
 #
 #                      Rob B Brown
-#                      rob@roobik.com
+#                      bbb@cpan.org
 #
 #  This package may be distributed under the terms of either the
 #  GNU General Public License
@@ -34,7 +34,7 @@ use Carp qw(croak confess);
 @ISA = qw(Exporter);
 @EXPORT_OK = qw(uncache);
 
-$VERSION = '1.17';
+$VERSION = '1.18';
 
 #Get constants, but without the bloat of
 #use Fcntl qw(LOCK_SH LOCK_EX LOCK_NB);
@@ -88,6 +88,7 @@ sub new {
   $self->{lock_type}  ||= 0;
   $self->{blocking_timeout}   ||= 0;
   $self->{stale_lock_timeout} ||= 0;
+  $self->{lock_pid} = $$;
   $self->{unlocked} = 1;
   foreach my $signal (@CATCH_SIGS) {
     $SIG{$signal} ||= $graceful_sig;
@@ -284,9 +285,9 @@ sub unlock ($) {
   if (!$self->{unlocked}) {
     unlink( $self->{rand_file} ) if -e $self->{rand_file};
     if( $self->{lock_type} & LOCK_SH ){
-      return $self->do_unlock_shared( $self->{lock_file}, $self->{lock_line} );
+      return $self->do_unlock_shared;
     }else{
-      return $self->do_unlock( $self->{lock_file} );
+      return $self->do_unlock;
     }
     $self->{unlocked} = 1;
   }
@@ -319,7 +320,7 @@ sub create_magic ($;$) {
   $errstr = undef;
   my $self = shift;
   my $append_file = shift || $self->{rand_file};
-  $self->{lock_line} ||= "$HOSTNAME $$ ".time()." ".int(rand()*10000)."\n";
+  $self->{lock_line} ||= "$HOSTNAME $self->{lock_pid} ".time()." ".int(rand()*10000)."\n";
   local *_FH;
   open (_FH,">>$append_file") or do { $errstr = "Couldn't open \"$append_file\" [$!]"; return undef; };
   print _FH $self->{lock_line};
@@ -399,7 +400,7 @@ sub do_unlock ($) {
   return unlink shift->{lock_file};
 }
 
-sub do_unlock_shared ($$) {
+sub do_unlock_shared ($) {
   $errstr = undef;
   my $self = shift;
   my $lock_file = $self->{lock_file};
@@ -449,6 +450,54 @@ sub uncache ($;$) {
 
   ### hard link to the actual file which will bring it up to date
   return ( link( $file, $rand_file) && unlink($rand_file) );
+}
+
+sub newpid {
+  my $self = shift;
+  # Detect if this is the parent or the child
+  if ($self->{lock_pid} == $$) {
+    # This is the parent
+
+    # Must wait for child to call newpid before processing.
+    # A little patience for the child to call newpid
+    my $patience = time + 10;
+    while (time < $patience) {
+      if (rename("$self->{lock_file}.fork",$self->{rand_file})) {
+        # Child finished its newpid call.
+        # Wipe the signal file.
+        unlink $self->{rand_file};
+        last;
+      }
+      # Brief pause before checking again
+      # to avoid intensive IO across NFS.
+      select(undef,undef,undef,0.1);
+    }
+
+    # Fake the parent into thinking it is already
+    # unlocked because the child will take care of it.
+    $self->{unlocked} = 1;
+  } else {
+    # This is the new child
+
+    # The lock_line found in the lock_file contents
+    # must be modified to reflect the new pid.
+
+    # Fix lock_pid to the new pid.
+    $self->{lock_pid} = $$;
+    # Backup the old lock_line.
+    my $old_line = $self->{lock_line};
+    # Clear lock_line to create a fresh one.
+    delete $self->{lock_line};
+    # Append a new lock_line to the lock_file.
+    $self->create_magic($self->{lock_file});
+    # Remove the old lock_line from lock_file.
+    local $self->{lock_line} = $old_line;
+    $self->do_unlock_shared;
+    # Create signal file to notify parent that
+    # the lock_line entry has been delegated.
+    open (_FH, ">$self->{lock_file}.fork");
+    close(_FH);
+  }
 }
 
 1;
@@ -589,6 +638,58 @@ recursion load could exist so do_lock will only recurse 10 times (this is only
 a problem if the stale_lock_timeout is set too low -- on the order of one or two
 seconds).
 
+=head1 METHODS
+
+After the $lock object is instantiated with new,
+as outlined above, some methods may be used for
+additional functionality.
+
+=head2 unlock
+
+  $lock->unlock;
+
+This method may be used to explicitly release a lock
+that is aquired.  In most cases, it is not necessary
+to call unlock directly since it will implicitly be
+called when the object leaves whatever scope it is in.
+
+=head2 uncache
+
+  $lock->uncache;
+  $lock->uncache("otherfile1");
+  uncache("otherfile2");
+
+This method is used to freshen up the contents of a
+file across NFS, ignoring what is contained in the
+NFS client cache.  It is always called from within
+the new constructor on the file that the lock is
+being attempted.  uncache may be used as either an
+object method or as a stand alone subroutine.
+
+=head2 newpid
+
+  my $pid = fork;
+  if (defined $pid) {
+    # Fork Failed
+  } elsif ($pid) {
+    $lock->newpid; # Parent
+  } else {
+    $lock->newpid; # Child
+  }
+
+If fork() is called after a lock has been aquired,
+then when the lock object leaves scope in either
+the parent or child, it will be released.  This
+behavior may be inappropriate for your application.
+To delegate ownership of the lock from the parent
+to the child, both the parent and child process
+must call the newpid() method after a successful
+fork() call.  This will prevent the parent from
+releasing the lock when unlock is called or when
+the lock object leaves scope.  This is also
+useful to allow the parent to fail on subsequent
+lock attempts if the child lock is still aquired.
+
 =head1 FAILURE
 
 On failure, a global variable, $File::NFSLock::errstr, should be set and should
@@ -602,9 +703,7 @@ suit other purposes (such as compatibility in mail systems).
 
 =head1 BUGS
 
-  Aquiring a lock within the same process always fails.
-
-  Stale locks from abnormal termination are not detected.
+Notify paul@seamons.com or bbb@cpan.org if you spot anything.
 
 =head2 FIFO
 
