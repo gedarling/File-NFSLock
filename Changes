@@ -1,6 +1,26 @@
 Revision history for Perl extension File::NFSLock.
 
-1.01  Jul 31 10:10 2001
+1.12  Nov 05 12:00 2001
+        - Change code to utilize numerical constants
+          instead of the magic strings.
+        - Change several sub routines into methods
+          of the object to reduce arguments passed.
+        - Avoid double unlocking (DESTROY).
+        - Added some nice tests.
+        - Pulled out stale_lock code to check once
+          at initial lock attempt instead of repeated
+          checks during the blocking lock loop.
+          This may change functionality slightly in
+          that a lock will never "become" stale if
+          it wasn't already stale when the lock
+          attempt initiated.
+        - Shared lock feature now functional.
+
+1.11  Oct 30 12:00 2001
+        - (Not released)
+        - Initial attempt to add shared lock feature.
+
+1.10  Jul 31 10:10 2001
         - Allow for numerical constants from Fcntl.
         - Return Error status in $errstr.
         - Allow for custom lock extensions via $LOCK_EXTENSION.
@@ -12,4 +32,3 @@ Revision history for Perl extension File::NFSLock.
         - Release under 1.00 tag as this is already in use.
         - Blocking and Nonblocking locking is possible.
         - uncache routine is available.
-                

@@ -1,23 +1,23 @@
 # -*- perl -*-
 #
 #  File::NFSLock - bdpO - NFS compatible (safe) locking utility
-#  
-#  $Id: NFSLock.pm,v 1.14 2001/07/31 18:23:17 pauls Exp $
-#  
+#
+#  $Id: NFSLock.pm,v 1.9 2001/11/06 00:16:34 hookbot Exp $
+#
 #  Copyright (C) 2001, Paul T Seamons
 #                      paul@seamons.com
 #                      http://seamons.com/
 #
 #                      Rob B Brown
 #                      rob@roobik.com
-#  
+#
 #  This package may be distributed under the terms of either the
-#  GNU General Public License 
+#  GNU General Public License
 #    or the
 #  Perl Artistic License
 #
 #  All rights reserved.
-#  
+#
 #  Please read the perldoc File::NFSLock
 #
 ################################################################
@@ -26,26 +26,34 @@ package File::NFSLock;
 
 use strict;
 use Exporter ();
-use vars qw(@ISA @EXPORT_OK $VERSION $TYPES $extended $LOCK_EXTENSION $errstr);
+use vars qw(@ISA @EXPORT_OK $VERSION $TYPES
+            $LOCK_EXTENSION $HOSTNAME $errstr);
+use Carp qw(croak confess);
 
 @ISA = qw(Exporter);
 @EXPORT_OK = qw(uncache);
 
-$VERSION = '1.10';
+$VERSION = '1.12';
 
-### hash of types
+#Get constants, but without the bloat of
+#use Fcntl qw(LOCK_SH LOCK_EX LOCK_NB);
+sub LOCK_SH {1}
+sub LOCK_EX {2}
+sub LOCK_NB {4}
+
+### Convert lock_type to a number
 $TYPES = {
-  BLOCKING    => 'BL',
-  BL          => 'BL',
-  EXCLUSIVE   => 'BL',
-  EX          => 'BL',
-  NONBLOCKING => 'NB',
-  NB          => 'NB',
-  SHARED      => 'SH',
-  SH          => 'SH',
+  BLOCKING    => LOCK_EX,
+  BL          => LOCK_EX,
+  EXCLUSIVE   => LOCK_EX,
+  EX          => LOCK_EX,
+  NONBLOCKING => LOCK_EX | LOCK_NB,
+  NB          => LOCK_EX | LOCK_NB,
+  SHARED      => LOCK_SH,
+  SH          => LOCK_SH,
 };
-$extended = undef; # are Fcntl constants loaded ?
 $LOCK_EXTENSION = '.NFSLock'; # customizable extension
+$HOSTNAME = undef;
 
 ###----------------------------------------------------------------###
 
@@ -62,67 +70,113 @@ sub new {
   }else{
     $self->{file}      = shift;
     $self->{lock_type} = shift;
-    $self->{blocking_timeout}   = @_ ? shift : undef;
-    $self->{stale_lock_timeout} = @_ ? shift : undef;
+    $self->{blocking_timeout}   = shift;
+    $self->{stale_lock_timeout} = shift;
   }
+  $self->{file}       ||= "";
+  $self->{lock_type}  ||= 0;
   $self->{blocking_timeout}   ||= 0;
   $self->{stale_lock_timeout} ||= 0;
 
-  ### if passed a numerical lock type, load contants
-  if( $self->{lock_type} =~ /^\d+/ && ! $extended ){
-    $extended = 1;
-    require "Fcntl.pm";
-    $TYPES->{ Fcntl::LOCK_SH() } = 'SH';
-    $TYPES->{ Fcntl::LOCK_EX() } = 'BL';
-    $TYPES->{ Fcntl::LOCK_NB() } = 'NB';
+  ### force lock_type to be numerical
+  if( $self->{lock_type} &&
+      $self->{lock_type} !~ /^\d+/ &&
+      exists $TYPES->{$self->{lock_type}} ){
+    $self->{lock_type} = $TYPES->{$self->{lock_type}};
+  }
+
+  croak ($errstr = "Unrecognized lock_type operation setting [$self->{lock_type}]")
+    unless $self->{lock_type} && $self->{lock_type} =~ /^\d+/;
+
+  ### need the hostname
+  if( !$HOSTNAME ){
+    require Sys::Hostname;
+    $HOSTNAME = &Sys::Hostname::hostname();
   }
 
   ### quick usage check
-  die $errstr = "Usage: my \$f = File::NFSLock->new('/pathtofile/file',\n"
-    ."'BLOCKING|EXCLUSIVE|NONBLOCKING|SHARED', [blocking_timeout, stale_lock_timeout]);\n"
-      ."(You passed \"$self->{file}\" and \"$self->{lock_type}\")"
-        unless length($self->{file}) && exists $TYPES->{ $self->{lock_type} };
-  $self->{lock_type} = $TYPES->{ $self->{lock_type} };
+  croak ($errstr = "Usage: my \$f = File::NFSLock->new('/pathtofile/file',\n"
+         ."'BLOCKING|EXCLUSIVE|NONBLOCKING|SHARED', [blocking_timeout, stale_lock_timeout]);\n"
+         ."(You passed \"$self->{file}\" and \"$self->{lock_type}\")")
+    unless length($self->{file});
 
-  die $errstr = "Shared Locks are not yet implemented (but soon)"
-    if $self->{lock_type} eq 'SH';
-  
-  ### set some utility files
-  $self->{local_file} = local_file( $self->{file} );
-  $self->{lock_file}  = $self->{file} . $LOCK_EXTENSION;
+  ### Input syntax checking passed, ready to bless
+  bless $self, $class;
 
-  ### open a local temporary file
-  open_local_file( $self->{local_file} )
-    or return undef;
+  ### choose a random filename
+  $self->{rand_file} = rand_file( $self->{file} );
 
-  ### nonblocking lock (return undef on failure)
-  if( $self->{lock_type} eq 'NB' ){
-    do_lock( $self->{lock_file}, $self->{local_file}, $self->{stale_lock_timeout} )
-      or do { $errstr = "Couldn't get a lock on a NONBLOCKING lock"; return undef; };
+  ### choose the lock filename
+  $self->{lock_file} = $self->{file} . $LOCK_EXTENSION;
 
-  ### blocking lock, wait until it's done
-  }else{
-    do_lock_blocking( $self->{lock_file}, $self->{local_file}, $self->{blocking_timeout}, $self->{stale_lock_timeout} )
+  my $quit_time = $self->{blocking_timeout} &&
+    !($self->{lock_type} & LOCK_NB) ?
+      time() + $self->{blocking_timeout} : 0;
+
+  ### remove an old lockfile if it is older than the stale_timeout
+  if( -e $self->{lock_file} && $self->{stale_lock_timeout} > 0 ){
+    # If it's older than stale_lock_timeout, wipe it.
+    if ( time() - (stat _)[9] > $self->{stale_lock_timeout} ){ # check mtime
+      unlink $self->{lock_file};
+    }
+  }
+
+  while (1) {
+    ### open the temporary file
+    $self->create_magic
       or return undef;
 
+    if ( $self->{lock_type} & LOCK_EX ) {
+      last if $self->do_lock;
+    } elsif ( $self->{lock_type} & LOCK_SH ) {
+      last if $self->do_lock_shared;
+    } else {
+      $errstr = "Unknown lock_type [$self->{lock_type}]";
+      return undef;
+    }
+
+    ### Lock failed!
+    ### If non-blocking, then kick out now.
+    ### ($errstr might already be set to the reason.)
+    if ($self->{lock_type} & LOCK_NB) {
+      $errstr ||= "NONBLOCKING lock failed!";
+      return undef;
+    }
+
+    ### wait a moment
+    sleep(1);
+
+    ### but don't wait past the time out
+    if( $quit_time && (time > $quit_time) ){
+      $errstr = "Timed out waiting for blocking lock";
+      return undef;
+    }
+
+    # BLOCKING Lock, So Keep Trying
   }
 
   ### clear up the NFS cache
-  uncache( $self->{file} );
+  $self->uncache;
 
-  ### only do a bless object if everything is good till now
-  bless $self, $class;
   return $self;
 }
 
-sub unlock ($) {
-  shift()->DESTROY();
+sub DESTROY {
+  shift()->unlock();
 }
 
-sub DESTROY {
+sub unlock ($) {
   my $self = shift;
-  unlink( $self->{local_file} ) if -e $self->{local_file};
-  do_unlock( $self->{lock_file} );
+  if (!$self->{unlocked}) {
+    unlink( $self->{rand_file} ) if -e $self->{rand_file};
+    if( $self->{lock_type} & LOCK_SH ){
+      return $self->do_unlock_shared( $self->{lock_file}, $self->{lock_line} );
+    }else{
+      return $self->do_unlock( $self->{lock_file} );
+    }
+    $self->{unlocked} = 1;
+  }
+  return 1;
 }
 
 ###----------------------------------------------------------------###
@@ -131,90 +185,146 @@ sub DESTROY {
 # took the concepts from Mail::Folder
 
 
-sub local_file ($) {
-  my $lock_file = shift;
-  return $lock_file .'.tmp.'. time()%10000 .'.'. $$ .'.'. int(rand()*10000);
+sub rand_file ($) {
+  my $file = shift;
+  "$file.tmp.". time()%10000 .'.'. $$ .'.'. int(rand()*10000);
 }
 
-sub open_local_file ($) {
+sub create_magic ($;$) {
   $errstr = undef;
-  my $local_file = shift;
-  open (_LOCK,">>$local_file") or do { $errstr = "Couldn't open \"$local_file\" [$!]"; return undef; };
-  print _LOCK "Pid [$$]\nHost [$ENV{HOSTNAME}]\nFile [$local_file]\n"; # trace information
-  close(_LOCK);
+  my $self = shift;
+  my $append_file = shift || $self->{rand_file};
+  $self->{lock_line} ||= "$HOSTNAME $$ ".time()." ".int(rand()*10000)."\n";
+  my $hand = do{ local *_FH };
+  open ($hand,">>$append_file") or do { $errstr = "Couldn't open \"$append_file\" [$!]"; return undef; };
+  print $hand $self->{lock_line};
+  close($hand);
   return 1;
 }
 
 sub do_lock {
   $errstr = undef;
-  my $lock_file     = shift;
-  my $local_file    = shift;
-  my $stale_timeout = shift || 0;
-  my $recurse       = shift || 0;
+  my $self = shift;
+  my $lock_file = $self->{lock_file};
+  my $rand_file = $self->{rand_file};
+  my $chmod = 0600;
+  chmod( $chmod, $rand_file)
+    || die "I need ability to chmod files to adequatetly perform locking";
 
-  ### try a hard link
-  link( $local_file, $lock_file);
-
-  ### did it work (two files pointing to local_file)
-  my $success = ( -e $local_file && (stat($local_file))[3] == 2 );
-  unlink $local_file;
-
-  ### remove an old lockfile if it is older than the stale_timeout
-  if( ! $success && $stale_timeout > 0 ){
-    if( !-e $lock_file || time() - (stat($lock_file))[9] > $stale_timeout ){ # check mtime
-      if( ! unlink($lock_file) ){
-        $errstr = "Can't unlink stale lock file \"$lock_file\" [$!]";
-        return undef;
-      }elsif( ++$recurse >= 10 ){
-        $errstr = "Max retries reached trying to remove stale lockfile";
-        return undef;
-      }else{
-        return do_lock( $lock_file, $local_file, $stale_timeout,$recurse );
-      }
-    }
-  }
+  ### try a hard link, if it worked
+  ### two files are pointing to $rand_file
+  my $success = link( $rand_file, $lock_file )
+    && -e $rand_file && (stat _)[3] == 2;
+  unlink $rand_file;
 
   return $success;
 }
 
-sub do_lock_blocking {
+sub do_lock_shared {
   $errstr = undef;
-  my $lock_file     = shift;
-  my $local_file    = shift;
-  my $timeout       = shift;
-  my $stale_timeout = shift || 0;
-  my $start_time = $timeout ? time() : 0;
+  my $self = shift;
+  my $lock_file  = $self->{lock_file};
+  my $rand_file  = $self->{rand_file};
 
-  while( ! do_lock( $lock_file, $local_file, $stale_timeout ) ){
+  ### chmod local file to make sure we know before
+  my $chmod = 0600;
+  my $bit   = 1;
+  $chmod |= $bit;
+  chmod( $chmod, $rand_file)
+    || die "I need ability to chmod files to adequatetly perform locking";
 
-    ### wait a moment
-    sleep(1);
+  ### lock the locking process
+  local $LOCK_EXTENSION = ".shared";
+  my $lock = new File::NFSLock {
+    file => $lock_file,
+    lock_type => LOCK_EX,
+    blocking_timeout => 62,
+    stale_lock_timeout => 60,
+  };
+  # The ".shared" lock will be released as this status
+  # is returned, whether or not the status is successful.
 
-    ### but don't wait past the time out
-    if( $timeout && (time() - $start_time) > $timeout ){
-      $errstr = "Timed out waiting for blocking lock";
-      return undef;
+  ### If I didn't have exclusive and the shared bit is not
+  ### set, I have failed
+
+  ### Try to create $lock_file from the special
+  ### file with the magic $bit set.
+  my $success = link( $rand_file, $lock_file);
+  unlink $rand_file;
+  if ( !$success ) {
+    if (-e $lock_file) {
+      if( ((stat _)[2] & $bit) != $bit ){
+        $errstr = "Exclusive lock exists.";
+        return undef;
+      }
+    } else {
+      # $lock_file does not exist? Race condition? Permission denied?
     }
-
-    ### reopen the file
-    open_local_file( $local_file ) or return undef;
+    # Looks like there already exists a share lock.
+    # So must be able to obtain another shared lock.
+    # Append my magic line too.
+    $self->create_magic ($self->{lock_file});
+  } else {
+    # Very first process to obtain a shared lock.
   }
-
+  # Success
   return 1;
 }
 
 sub do_unlock ($) {
-  my $lock_file = shift;
-  return unlink($lock_file);
+  return unlink shift->{lock_file};
+}
+
+sub do_unlock_shared ($$) {
+  $errstr = undef;
+  my $self = shift;
+  my $lock_file = $self->{lock_file};
+  my $lock_line = $self->{lock_line};
+
+  ### lock the locking process
+  local $LOCK_EXTENSION = '.shared';
+  my $lock = new File::NFSLock ($lock_file,LOCK_EX,62,60);
+
+  ### get the handle on the lock file
+  my $hand = do{ local *_FH };
+  if( ! open ($hand,'+<'.$lock_file) ){
+    if( ! -e $lock_file ){
+      return 1;
+    }else{
+      die "Could not open for writing shared lock file $lock_file ($!)";
+    }
+  }
+
+  ### read existing file
+  my $content = '';
+  while(defined(my $line=<$hand>)){
+    next if $line eq $lock_line;
+    $content .= $line;
+  }
+
+  ### other shared locks exist
+  if( length($content) ){
+    seek     $hand, 0, 0;
+    print    $hand $content;
+    truncate $hand, length($content);
+    close $hand;
+
+  ### only I exist
+  }else{
+    close $hand;
+    unlink $lock_file;
+  }
+
 }
 
 sub uncache ($;$) {
-  shift() if ref($_[0]);  # allow as method call
-  my $file       = shift;
-  my $local_file = local_file( $file );
+  # allow as method call
+  my $file = pop;
+  ref $file && ($file = $file->{file});
+  my $rand_file = rand_file( $file );
 
   ### hard link to the actual file which will bring it up to date
-  return ( link($file, $local_file) && unlink($local_file) );
+  return ( link( $file, $rand_file) && unlink($rand_file) );
 }
 
 1;
@@ -233,10 +343,10 @@ File::NFSLock - perl module to do NFS (or not) locking
   ### set up a lock - lasts until object looses scope
   if( defined(my $lock = File::NFSLock->new({
     file      => $file,
-    lock_type => "NONBLOCKING"
+    lock_type => "NONBLOCKING",
     blocking_timeout   => 10,      # 10 sec
-    stale_lock_timeout => 30 * 60, # 60 min
-    })) ){
+    stale_lock_timeout => 30 * 60, # 30 min
+  })) ){
     
     ### OR
     ### my $lock = File::NFSLock->new($file,"NONBLOCKING",10,30*60)
@@ -325,6 +435,9 @@ Lock type must be one of the following:
   NB
   SHARED
   SH
+
+Or else one or more of the following joined with '|':
+
   Fcntl::LOCK_EX() (BLOCKING)
   Fcntl::LOCK_NB() (NONBLOCKING)
   Fcntl::LOCK_SH() (SHARED)
@@ -333,8 +446,8 @@ Lock type determines whether the lock will be blocking, non blocking,
 or shared.  Blocking locks will wait until other locks are removed
 before the process continues.  Non blocking locks will return undef if
 another process currently has the lock.  Shared will allow other
-process to do a shared lock at the same time (shared is not yet
-implemented).
+process to do a shared lock at the same time as long as there is not
+already an exclusive lock obtained.
 
 =item Parameter 3: blocking_timeout (optional)
 
@@ -363,22 +476,24 @@ By default File::NFSLock will use a lock file extenstion of ".NFSLock".  This is
 now in a global variable $File::NFSLock::LOCK_EXTENSION that may be changed to
 suit other purposes (such as compatibility in mail systems).
 
-=head1 TODO
+=head1 BUGS
 
-Features yet to be implemented...
 
-=over 4
+=head2 FIFO
 
-=item SHARED locks
+Locks are not necessarily obtained on a first come first serve basis.
+Not only does this not seem fair to new processes trying to obtain a lock,
+but it may cause a process starvation condition on heavily locked files.
 
-Need to allow for shared locking.  This will allow for safe
-reading on files.  Underway.
 
-=item Tests
+=head2 DIRECTORIES
 
-Improve the test suite.
-
-=back
+Locks cannot be obtained on directory nodes, nor can a directory node be
+uncached with the uncache routine because hard links do not work with
+directory nodes.  Some other algorithm might be used to uncache a
+directory, but I am unaware of the best way to do it.  The biggest use I
+can see would be to avoid NFS cache of directory modified and last accessed
+timestamps.
 
 
 =head1 AUTHORS
