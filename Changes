@@ -1,5 +1,12 @@
 Revision history for Perl extension File::NFSLock.
 
+1.01  Jul 31 10:10 2001
+        - Allow for numerical constants from Fcntl.
+        - Return Error status in $errstr.
+        - Allow for custom lock extensions via $LOCK_EXTENSION.
+        - Allow for passing parameters as a hashref
+        - Allow for stale_lock_timeout parameter
+
 1.00  May 24 10:50 2001
         - Initial release of File::NFSLock.
         - Release under 1.00 tag as this is already in use.

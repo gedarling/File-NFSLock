@@ -7,8 +7,17 @@ SYNOPSIS
       my $file = "somefile";
 
       ### set up a lock - lasts until object looses scope
-      if( defined(my $lock = File::NFSLock->new($file,"NONBLOCKING")) ){
-    
+      if( defined(my $lock = File::NFSLock->new({
+        file      => $file,
+        lock_type => "NONBLOCKING"
+        blocking_timeout   => 10,      # 10 sec
+        stale_lock_timeout => 30 * 60, # 60 min
+        })) ){
+        
+        ### OR
+        ### my $lock = File::NFSLock->new($file,"NONBLOCKING",10,30*60)
+
+        
         ### do write protected stuff on $file
         ### at this point $file is uncached from NFS (most recent)
         open(FILE, "+<$file") || die $!;
@@ -26,81 +35,108 @@ SYNOPSIS
         ### OR
         ### undef $lock;
         ### OR let $lock go out of scope
+      }else{
+        die "I couldn't lock the file [$File::NFSLock::errstr]";
       }
 
 DESCRIPTION
-    Program based of concept of hard linking of files being atomic across
-    NFS. This concept was mentioned in Mail::Box::Locker (which was
-    originally presented in Mail::Folder::Maildir). Some routine flow is
-    taken from there -- particularly the idea of creating a random local
-    file, hard linking a common file to the local file, and then checking
-    the nlink status. Some ideologies were not complete (uncache mechanism,
-    shared locking) and some coding was even incorrect (wrong stat index).
-    File::NFSLock was written to be light, generic, and fast.
+    Program based of concept of hard linking of files being atomic
+    across NFS. This concept was mentioned in Mail::Box::Locker
+    (which was originally presented in Mail::Folder::Maildir). Some
+    routine flow is taken from there -- particularly the idea of
+    creating a random local file, hard linking a common file to the
+    local file, and then checking the nlink status. Some ideologies
+    were not complete (uncache mechanism, shared locking) and some
+    coding was even incorrect (wrong stat index). File::NFSLock was
+    written to be light, generic, and fast.
 
 USAGE
-    Locking occurs by creating a File::NFSLock object. If the object is
-    created successfully, a lock is currently in place and remains in place
-    until the lock object goes out of scope (or calls the unlock method).
+    Locking occurs by creating a File::NFSLock object. If the object
+    is created successfully, a lock is currently in place and
+    remains in place until the lock object goes out of scope (or
+    calls the unlock method).
 
-    A lock object is created by calling the new method and passing two or
-    three parameters:
+    A lock object is created by calling the new method and passing
+    two to four parameters in the following manner:
 
-    Parameter 1: filename
-        Filename of the file upon which it is anticipated that a write will
-        happen to. Locking will provide the most recent version (uncached)
-        of this file upon a successful file lock.
+      my $lock = File::NFSLock->new($file,
+                                    $lock_type,
+                                    $blocking_timeout,
+                                    $stale_lock_timeout,
+                                    );
 
-    Parameter 2: lock type
-        Lock type must be one of the following:
+    Additionally, parameters may be passed as a hashref: my $lock =
+    File::NFSLock->new({ file => $file, lock_type => $lock_type,
+    blocking_timeout => $blocking_timeout, stale_lock_timeout =>
+    $stale_lock_timeout, });
 
-          BLOCKING
-          BL
-          NONBLOCKING
-          NB
-          SHARED
-          SH
+PARAMETERS
+    Parameter 1: file
+        Filename of the file upon which it is anticipated that a
+        write will happen to. Locking will provide the most recent
+        version (uncached) of this file upon a successful file lock.
+        It is not necessary for this file to exist.
+
+    Parameter 2: lock_type
+        Lock type must be one of the following: BLOCKING BL
+        EXCLUSIVE (BLOCKING) EX NONBLOCKING NB SHARED SH
+        Fcntl::LOCK_EX() (BLOCKING) Fcntl::LOCK_NB() (NONBLOCKING)
+        Fcntl::LOCK_SH() (SHARED)
 
         Lock type determines whether the lock will be blocking, non
-        blocking, or shared. Blocking locks will wait until other locks are
-        removed before the process continues. Non blocking locks will return
-        undef if another process currently has the lock. Shared will allow
-        other process to do a shared lock at the same time (shared is not
-        yet implemented).
+        blocking, or shared. Blocking locks will wait until other
+        locks are removed before the process continues. Non blocking
+        locks will return undef if another process currently has the
+        lock. Shared will allow other process to do a shared lock at
+        the same time (shared is not yet implemented).
 
-    Parameter 3: timeout (option)
+    Parameter 3: blocking_timeout (optional)
         Timeout is used in conjunction with a blocking timeout. If
-        specified, File::NFSLock will block up to the number of seconds
-        specified in timeout before returning undef (could not get a lock).
+        specified, File::NFSLock will block up to the number of
+        seconds specified in timeout before returning undef (could
+        not get a lock).
+
+    Parameter 4: stale_lock_timeout (optional)
+        Timeout is used to see if an existing lock file is older
+        than the stale lock timeout. If do_lock fails to get a lock,
+        the modified time is checked and do_lock is attempted again.
+        If the stale_lock_timeout is set to low, a recursion load
+        could exist so do_lock will only recurse 10 times (this is
+        only a problem if the stale_lock_timeout is set too low --
+        on the order of one or two seconds).
+
+FAILURE
+        On failure, a global variable, $File::NFSLock::errstr,
+        should be set and should contain the cause for the failure
+        to get a lock. Useful primarily for debugging.
+
+LOCK_EXTENSION
+        By default File::NFSLock will use a lock file extenstion of
+        ".NFSLock". This is now in a global variable
+        $File::NFSLock::LOCK_EXTENSION that may be changed to suit
+        other purposes (such as compatibility in mail systems).
 
 TODO
         Features yet to be implemented...
 
-        SHARED locks
-            Need to allow for shared locking. This will allow for safe
-            reading on files. Underway.
+    SHARED locks
+            Need to allow for shared locking. This will allow for
+            safe reading on files. Underway.
 
-        Fnctl constants
-            Allow for passing of Fnctl constants rather than keywords.
-
-        Stale lock checking
-            Allow for easy view into whether a lock is stale or not. Stale
-            locks can occur if process is "kill -9"ed during a lock.
-
-        Tests
-            Improve the test suite.
+    Tests   Improve the test suite.
 
 AUTHORS
-        Paul T Seamons (paul@seamons.com) - Performed majority of the
-        programming with copious amounts of input from Rob Brown.
+        Paul T Seamons (paul@seamons.com) - Performed majority of
+        the programming with copious amounts of input from Rob
+        Brown.
 
         Rob B Brown (rob@roobik.com) - In addition to helping in the
-        programming, Rob Brown provided most of the core testing to make
-        sure implementation worked properly.
+        programming, Rob Brown provided most of the core testing to
+        make sure implementation worked properly.
 
         Also Mark Overmeer (mark@overmeer.net) - Author of
-        Mail::Box::Locker, from which some key concepts for File::NFSLock
-        were taken.
+        Mail::Box::Locker, from which some key concepts for
+        File::NFSLock were taken.
 
         Also Kevin Johnson (kjj@pobox.com) - Author of
         Mail::Folder::Maildir, from which Mark Overmeer based
@@ -113,7 +149,7 @@ COPYRIGHT
 
                               Rob B Brown
                               rob@roobik.com
-  
+          
           This package may be distributed under the terms of either the
           GNU General Public License 
             or the
