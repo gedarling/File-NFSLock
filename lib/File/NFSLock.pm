@@ -159,9 +159,9 @@ sub new {
     ### stab in the dark to possibly find long dead processes.
 
     ### If lock exists and is readable, see who is mooching on the lock
-
+    
     if ( -e $self->{lock_file} &&
-         open (_FH,"+<$self->{lock_file}") ){
+         open (my $fh, '+<', $self->{lock_file}) ){
 
       my @mine = ();
       my @them = ();
@@ -210,18 +210,18 @@ sub new {
 
         ### Save any valid locks or wipe file.
         if( length($content) ){
-          seek     _FH, 0, 0;
-          print    _FH $content;
-          truncate _FH, length($content);
-          close    _FH;
+          seek     $fh, 0, 0;
+          print    $fh $content;
+          truncate $fh, length($content);
+          close    $fh;
         }else{
-          close _FH;
+          close $fh;
           unlink $self->{lock_file};
         }
 
       ### No "dead" or stale locks found.
       } else {
-        close _FH;
+        close $fh;
       }
 
       ### If attempting to acquire the same type of lock
@@ -308,10 +308,10 @@ sub create_magic ($;$) {
   my $self = shift;
   my $append_file = shift || $self->{rand_file};
   $self->{lock_line} ||= "$HOSTNAME $self->{lock_pid} ".time()." ".int(rand()*10000)."\n";
-  local *_FH;
-  open (_FH,">>$append_file") or do { $errstr = "Couldn't open \"$append_file\" [$!]"; return undef; };
-  print _FH $self->{lock_line};
-  close _FH;
+  
+  open (my $fh, '>>', $append_file) or do { $errstr = "Couldn't open \"$append_file\" [$!]"; return undef; };
+  print $fh $self->{lock_line};
+  close $fh;
   return 1;
 }
 
@@ -394,8 +394,8 @@ sub do_unlock_shared ($) {
   my $lock = new File::NFSLock ($lock_file,LOCK_EX,62,60);
 
   ### get the handle on the lock file
-  local *_FH;
-  if( ! open (_FH,"+<$lock_file") ){
+  open (my $fh, '+<', $lock_file);
+  if( ! $fh ){
     if( ! -e $lock_file ){
       return 1;
     }else{
@@ -405,21 +405,21 @@ sub do_unlock_shared ($) {
 
   ### read existing file
   my $content = '';
-  while(defined(my $line=<_FH>)){
+  while(defined(my $line=<$fh>)){
     next if $line eq $lock_line;
     $content .= $line;
   }
 
   ### other shared locks exist
   if( length($content) ){
-    seek     _FH, 0, 0;
-    print    _FH $content;
-    truncate _FH, length($content);
-    close    _FH;
+    seek     $fh, 0, 0;
+    print    $fh $content;
+    truncate $fh, length($content);
+    close    $fh;
 
   ### only I exist
   }else{
-    close _FH;
+    close $fh;
     unlink $lock_file;
   }
 
@@ -478,8 +478,8 @@ sub newpid {
     $self->do_unlock_shared;
     # Create signal file to notify parent that
     # the lock_line entry has been delegated.
-    open (_FH, ">$self->{lock_file}.fork");
-    close(_FH);
+    open (my $fh, ,'>',$self->{lock_file}.fork);
+    close($fh);
   }
 }
 
